@@ -1,5 +1,25 @@
 import sqlite3
 
+def model_filtrate(cursor, table, show='*', model_name=None, task_type=None, dataset_name=None, seq_len=None, metric=None, orderBy=None):
+    sql_cmd = f"SELECT distinct {show} FROM {table} "
+    if model_name or task_type or dataset_name or seq_len or metric:
+        sql_cmd += f" WHERE 1"
+        if model_name:
+            sql_cmd += f" AND model_name='{model_name}'"
+        if task_type:
+            sql_cmd += f" AND task_type='{task_type}'"
+        if dataset_name:
+            sql_cmd += f" AND dataset_name='{dataset_name}'"
+        if seq_len:
+            sql_cmd += f" AND seq_len='{seq_len}'"
+        if metric:
+            sql_cmd += f" AND metric='{metric}'"
+        if orderBy:
+            sql_cmd+=f" ORDER BY {orderBy}"
+    print("sql input command: ", sql_cmd)
+    cursor.execute(sql_cmd)
+    return cursor
+
 conn = sqlite3.connect('results.db')
 cursor = conn.cursor()
 
@@ -7,7 +27,7 @@ cursor.execute('''
     CREATE TABLE IF NOT EXISTS Results (
         id INTEGER PRIMARY KEY,
         model_name TEXT,
-        task_type TEXT CHECK(task_type IN ('classification', 'long-term-forecast', 'short-term-forecast', 'anomaly')),
+        task_type TEXT CHECK(task_type IN ('classification', 'long-term-forecast', 'short-term-forecast', 'anomaly', 'imputation')),
         dataset_name TEXT,
         seq_len INTEGER,
         metric TEXT,
