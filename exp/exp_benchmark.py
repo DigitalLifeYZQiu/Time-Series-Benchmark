@@ -44,7 +44,7 @@ class Exp_Benchmark(Exp_Benchmark_Basic):
         folder_path = './test_results/' + setting + '/' + self.args.data_path + '/' + f'{self.args.output_len}/'
         if not os.path.exists(folder_path) and int(os.environ.get("LOCAL_RANK", "0")) == 0:
             os.makedirs(folder_path)
-
+        self.model.eval()
         if self.args.output_len_list is None:
             self.args.output_len_list = [self.args.output_len]
 
