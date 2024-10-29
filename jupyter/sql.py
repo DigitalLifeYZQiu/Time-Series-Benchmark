@@ -1,11 +1,19 @@
 import sqlite3
 
-def model_filtrate(cursor, table, show='*', model_name=None, task_type=None, dataset_name=None, seq_len=None, metric=None, orderBy=None):
+def model_filter(model_name=None, task_type=None, dataset_name=None, seq_len=None, metric=None, orderBy=None):
+    conn = sqlite3.connect('results.db')
+    print("Connection established to ---> results.db")
+    cursor = conn.cursor()
+    table = 'Results'
+    print("Reading from table name ---> Results")
+
+    show = 'model_name, value'
+
     sql_cmd = f"SELECT distinct {show} FROM {table} "
     if model_name or task_type or dataset_name or seq_len or metric:
         sql_cmd += f" WHERE 1"
         if model_name:
-            sql_cmd += f" AND model_name='{model_name}'"
+            sql_cmd += f" AND model_name IN{model_name}"
         if task_type:
             sql_cmd += f" AND task_type='{task_type}'"
         if dataset_name:
@@ -18,7 +26,10 @@ def model_filtrate(cursor, table, show='*', model_name=None, task_type=None, dat
             sql_cmd+=f" ORDER BY {orderBy}"
     print("sql input command: ", sql_cmd)
     cursor.execute(sql_cmd)
-    return cursor
+    res = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return res
 
 conn = sqlite3.connect('results.db')
 cursor = conn.cursor()
