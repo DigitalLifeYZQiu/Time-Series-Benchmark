@@ -15,6 +15,8 @@ from utils.metrics import metric
 from utils.tools import EarlyStopping, visual, LargeScheduler, attn_map
 from utils.augmentation import run_augmentation_single
 
+from utils.adaptation import adaptivity
+
 warnings.filterwarnings('ignore')
 
 
@@ -336,3 +338,318 @@ class Exp_Forecast(Exp_Basic):
         else:
             outputs = self.model(batch_x)
         return outputs
+    
+    # 适应性测试，计算适应性指标
+    def adaptation_test(self, setting):
+        print('Model parameters: ', sum(param.numel() for param in self.model.parameters()))
+        attns = []
+        folder_path = './test_results/' + setting + '/' + self.args.data_path + '/' + f'{self.args.output_len}/'
+        if not os.path.exists(folder_path) and int(os.environ.get("LOCAL_RANK", "0")) == 0:
+            os.makedirs(folder_path)
+        self.model.eval()
+        if self.args.output_len_list is None:
+            self.args.output_len_list = [self.args.output_len]
+
+        trues_list = [[] for _ in range(len(self.args.output_len_list))]
+        trans_list = [[] for _ in range(len(self.args.output_len_list))]
+        self.args.output_len_list.sort()
+        adp_type = ""
+        
+        # pic_path = './adapt/' + setting + '/' + self.args.data_path + '/'
+
+        with torch.no_grad():
+            for output_ptr in range(len(self.args.output_len_list)):
+                self.args.output_len = self.args.output_len_list[output_ptr]
+                test_data, test_loader = data_provider(self.args, flag='test')
+                
+                for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
+                    # 适应性数据替换
+                    if i % 2 == 0:
+                        trans_batch_x, adp_type = adaptivity(batch_x, i, self.args, rd=1)
+                    else:
+                        trans_batch_x, adp_type = adaptivity(batch_x, i, self.args, rd=1)
+                    # 推理
+                    trans_pred, true = self.adaptation_forecast(test_data, trans_batch_x, batch_y, batch_x_mark, batch_y_mark)
+
+                    trues_list[output_ptr].append(true)
+                    trans_list[output_ptr].append(trans_pred)
+
+        if self.args.output_len_list is not None:
+            for i in range(len(trues_list)):
+                true = trues_list[i]
+                trans_preds = trans_list[i]
+                true = torch.cat(true, dim=0).numpy()
+                trans_preds = torch.cat(trans_preds, dim=0).numpy()
+                
+                mae, mse, rmse, mape, mspe = metric(true, trans_preds)
+                print(f"output_len: {self.args.output_len_list[i]}")
+                print('{} adaptation:{}'.format(adp_type, mae))
+        
+        return
+
+    def adaptation_forecast(self, test_data, batch_x, batch_y, batch_x_mark, batch_y_mark):
+        batch_x = batch_x.float().to(self.device)
+        batch_y = batch_y.float().to(self.device)
+        batch_x_mark = batch_x_mark.float().to(self.device)
+        batch_y_mark = batch_y_mark.float().to(self.device)
+
+        dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
+        dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+        inference_steps = self.args.output_len // self.args.pred_len
+        dis = self.args.output_len - inference_steps * self.args.pred_len
+        if dis != 0:
+            inference_steps += 1
+        pred_y = []
+        for j in range(inference_steps):
+            if len(pred_y) != 0:
+                batch_x = torch.cat([batch_x[:, self.args.pred_len:, :], pred_y[-1]], dim=1)
+                tmp = batch_y_mark[:, j - 1:j, :]
+                batch_x_mark = torch.cat([batch_x_mark[:, 1:, :], tmp], dim=1)
+
+            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+
+            f_dim = -1 if self.args.features == 'MS' else 0
+            pred_y.append(outputs[:, -self.args.pred_len:, :])
+        pred_y = torch.cat(pred_y, dim=1)
+
+        if dis != 0:
+            pred_y = pred_y[:, :-dis, :]
+
+        if self.args.use_ims:
+            batch_y = batch_y[:, self.args.label_len:self.args.label_len + self.args.output_len, :].to(
+                self.device)
+        else:
+            batch_y = batch_y[:, :self.args.output_len, :].to(self.device)
+
+        outputs = pred_y.detach().cpu()
+        batch_y = batch_y.detach().cpu()
+            
+        if test_data.scale and self.args.inverse:
+            shape = outputs.shape
+            outputs = test_data.inverse_transform(outputs.squeeze(0)).reshape(shape)
+            batch_y = test_data.inverse_transform(batch_y.squeeze(0)).reshape(shape)
+
+        outputs = outputs[:, :, f_dim:]
+        batch_y = batch_y[:, :, f_dim:]
+
+        pred = outputs
+        true = batch_y
+        
+        return pred, true
+
+    # 验证适应性指标
+    def adaptation_varify(self, setting):
+        attns = []
+        folder_path = './test_results/' + setting + '/' + self.args.data_path + '/' + f'{self.args.output_len}/'
+        if not os.path.exists(folder_path) and int(os.environ.get("LOCAL_RANK", "0")) == 0:
+            os.makedirs(folder_path)
+        self.model.eval()
+        if self.args.output_len_list is None:
+            self.args.output_len_list = [self.args.output_len]
+
+        trues_list = [[] for _ in range(len(self.args.output_len_list))]
+        trans_list = [[] for _ in range(len(self.args.output_len_list))]
+        self.args.output_len_list.sort()
+        adp_type = ""
+        
+        # pic_path = './adapt/' + setting + '/' + self.args.data_path + '/'
+
+        with torch.no_grad():
+            for output_ptr in range(len(self.args.output_len_list)):
+                self.args.output_len = self.args.output_len_list[output_ptr]
+                test_data, test_loader = data_provider(self.args, flag='test')
+                
+                for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
+                    if i % 50 == 0 or i % 51 == 0:
+                        # 生成系统随机数
+                        random_bytes = os.urandom(4)
+                        random_int = int.from_bytes(random_bytes, 'big')
+                        random_float = (random_int >> 11) / (1 << 23) + 0.5
+                        # 适应性数据替换
+                        trans_batch_x, adp_type = adaptivity(batch_x, i, self.args, rd=random_float)
+                    # 推理
+                    trans_pred, true = self.adaptation_forecast(test_data, trans_batch_x, batch_y, batch_x_mark, batch_y_mark)
+                    
+                    trues_list[output_ptr].append(true)
+                    trans_list[output_ptr].append(trans_pred)
+
+        if self.args.output_len_list is not None:
+            for i in range(len(trues_list)):
+                true = trues_list[i]
+                trans_preds = trans_list[i]
+                true = torch.cat(true, dim=0).numpy()
+                trans_preds = torch.cat(trans_preds, dim=0).numpy()
+                
+                mae, mse, rmse, mape, mspe = metric(true, trans_preds)
+                print('{} adaptation verify:{}'.format(adp_type, mae))
+        
+        return
+
+
+    def fgsm_attack(self, data, epsilon, data_grad):
+        # Collect the element-wise sign of the data gradient
+        sign_data_grad = data_grad.sign()
+        # Create the perturbed image by adjusting each pixel of the input image
+        perturbed_data = data + epsilon*sign_data_grad
+        # Adding clipping to maintain [0,1] range
+        # perturbed_data = torch.clamp(perturbed_data, 0, 1)
+        # Return the perturbed image
+        return perturbed_data
+
+    def adversarial_attack(self, setting, test=0):
+        test_data, test_loader = self._get_data(flag='test')
+        if test:
+            if self.args.ckpt_path != '':
+                if self.args.ckpt_path == 'random':
+                    print('loading model randomly')
+                else:
+                    print('loading model: ', self.args.ckpt_path)
+                    if self.args.ckpt_path.endswith('.pth'):
+                        self.model.load_state_dict(torch.load(self.args.ckpt_path))
+                    else:
+                        raise NotImplementedError
+            else:
+                print('loading model with settings: {}'.format(setting))
+                self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
+            
+        preds = []
+        trues = []
+        adv_preds = []
+        folder_path = './test_results/' + setting + '/'
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+
+        self.model.eval()
+        model_optim = self._select_optimizer()
+        criterion = self._select_criterion()
+        
+        for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
+            model_optim.zero_grad()
+            batch_x = batch_x.float().to(self.device)
+            batch_y = batch_y.float().to(self.device)
+            batch_x.requires_grad= True
+
+            batch_x_mark = batch_x_mark.float().to(self.device)
+            batch_y_mark = batch_y_mark.float().to(self.device)
+
+            # decoder input
+            dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
+            dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+            # encoder - decoder
+            if self.args.use_amp:
+                with torch.cuda.amp.autocast():
+                    if self.args.output_attention:
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                    else:
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+            else:
+                if self.args.output_attention:
+                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                else:
+                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+
+            f_dim = -1 if self.args.features == 'MS' else 0
+            outputs = outputs[:, -self.args.pred_len:, :]
+            batch_y = batch_y[:, -self.args.pred_len:, :].to(self.device)
+            loss = criterion(outputs,batch_y)
+            loss.backward()
+            data_grad = batch_x.grad.data
+            if i % 2 == 0:
+                adv_batch_x = self.fgsm_attack(batch_x, 0.1, data_grad)
+            else:
+                adv_batch_x = self.fgsm_attack(batch_x, 0.07, data_grad)
+
+            if self.args.use_amp:
+                with torch.cuda.amp.autocast():
+                    if self.args.output_attention:
+                        adv_outputs = self.model(adv_batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                    else:
+                        adv_outputs = self.model(adv_batch_x, batch_x_mark, dec_inp, batch_y_mark)
+            else:
+                if self.args.output_attention:
+                    adv_outputs = self.model(adv_batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                else:
+                    adv_outputs = self.model(adv_batch_x, batch_x_mark, dec_inp, batch_y_mark)
+
+            f_dim = -1 if self.args.features == 'MS' else 0
+            adv_outputs = adv_outputs[:, -self.args.pred_len:, :]
+
+            outputs = outputs.detach().cpu().numpy()
+            adv_outputs = adv_outputs.detach().cpu().numpy()
+            batch_y = batch_y.detach().cpu().numpy()
+
+            if ',' in self.args.data:
+                if test_data.datasets[0].scale and self.args.inverse:
+                    shape = outputs.shape
+                    outputs = test_data.inverse_transform(outputs.squeeze(0)).reshape(shape)
+                    batch_y = test_data.inverse_transform(batch_y.squeeze(0)).reshape(shape)
+            else:
+                if test_data.scale and self.args.inverse:
+                    shape = outputs.shape
+                    outputs = test_data.inverse_transform(outputs.reshape(shape[0] * shape[1], -1)).reshape(shape)
+                    batch_y = test_data.inverse_transform(batch_y.reshape(shape[0] * shape[1], -1)).reshape(shape)
+                    adv_outputs = test_data.inverse_transform(adv_outputs.reshape(shape[0] * shape[1], -1)).reshape(shape)
+
+            outputs = outputs[:, :, f_dim:]
+            batch_y = batch_y[:, :, f_dim:]
+            adv_outputs = adv_outputs[:, :, f_dim:]
+
+            pred = outputs
+            true = batch_y
+            adv_pred = adv_outputs
+
+            preds.append(pred)
+            trues.append(true)
+            adv_preds.append(adv_pred)
+
+            if i % 5 == 0:
+                input = batch_x.detach().cpu().numpy()
+                adv_input = adv_batch_x.detach().cpu().numpy()
+                if ',' in self.args.data:
+                    if test_data.datasets[0].scale and self.args.inverse:
+                        shape = input.shape
+                        input = test_data.inverse_transform(input.squeeze(0)).reshape(shape)
+                else:
+                    if test_data.scale and self.args.inverse:
+                        shape = input.shape
+                        input = test_data.inverse_transform(input.reshape(shape[0] * shape[1], -1)).reshape(shape)
+                        adv_input = test_data.inverse_transform(adv_input.reshape(shape[0] * shape[1], -1)).reshape(shape)
+                # gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
+                # pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
+                # adv = np.concatenate((adv_input[0, :, -1], adv_pred[0, :, -1]), axis=0)
+                # visual(gt, pd, adv, os.path.join(folder_path, str(i) + '.pdf'))
+
+        preds = np.array(preds)
+        trues = np.array(trues)
+        adv_preds = np.array(adv_preds)
+        # print('test shape:', preds.shape, trues.shape, adv_preds.shape)
+        preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
+        trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
+        adv_preds = adv_preds.reshape(-1, adv_preds.shape[-2], adv_preds.shape[-1])
+        # print('test shape:', preds.shape, trues.shape, adv_preds.shape)
+
+        # result save
+        folder_path = './results/' + setting + '/'
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+
+        mae, mse, rmse, mape, mspe = metric(preds, trues)
+        adv_mae, adv_mse, adv_rmse, adv_mape, adv_mspe = metric(adv_preds, trues)
+        print(f"output_len: {self.args.output_len}")
+        print('Before attacking: mse:{}, mae:{}'.format(mse, mae))
+        print('After attacking: mse:{}, mae:{}'.format(adv_mse, adv_mae))
+        print("Adversary adaptation:{}".format(adv_mae))
+
+        f = open("result_long_term_forecast.txt", 'a')
+        f.write(setting + "  \n")
+        f.write('Before attacking: mse:{}, mae:{}'.format(mse, mae))
+        f.write('After attacking: mse:{}, mae:{}'.format(adv_mse, adv_mae))
+        f.write('\n')
+        f.write('\n')
+        f.close()
+
+        # np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe]))
+        # np.save(folder_path + 'pred.npy', preds)
+        # np.save(folder_path + 'true.npy', trues)
+
+        return

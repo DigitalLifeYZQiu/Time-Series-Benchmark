@@ -147,7 +147,14 @@ if __name__ == '__main__':
         'timewarp', 'windowslice', 'windowwarp', 'rotation', 'spawner',
         'dtwwarp', 'shapedtwwarp', 'wdba', 'discdtw', 'discsdtw'
     ]
-
+    
+    parser.add_argument('--adaptation', default=False, action="store_true", help="Add adaptation test")
+    parser.add_argument('--noiseness', default=False, action="store_true", help="Add noiseness")
+    parser.add_argument('--periodicity', default=False, action="store_true", help="Add periodicity")
+    parser.add_argument('--distribution', default=False, action="store_true", help="Change distribution")
+    parser.add_argument('--anomaly', default=False, action="store_true", help="Add anomaly")
+    parser.add_argument('--adversary', default=False, action="store_true", help="Add adversary")
+    
     args = parser.parse_args()
     
     if args.output_len is None:
@@ -220,7 +227,12 @@ if __name__ == '__main__':
                 exp.finetune(setting)
 
                 print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-                exp.test(setting)
+                if args.adaptation and not args.adversary:
+                    exp.adaptation_test(setting)
+                elif args.adaptation and args.adversary:
+                    exp.adversarial_attack(setting)
+                else:
+                    exp.test(setting)
                 torch.cuda.empty_cache()
         else:
             ii = 0
@@ -247,5 +259,10 @@ if __name__ == '__main__':
             setting += datetime.now().strftime("%y-%m-%d_%H-%M-%S")
             exp = Exp(args)  # set experiments
             print('>>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<'.format(setting))
-            exp.test(setting, test=1)
+            if args.adaptation and not args.adversary:
+                exp.adaptation_test(setting)
+            elif args.adaptation and args.adversary:
+                exp.adversarial_attack(setting)
+            else:
+                exp.test(setting)
             torch.cuda.empty_cache()
