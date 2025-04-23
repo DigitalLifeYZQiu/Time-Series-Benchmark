@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from data_provider.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, \
-    Dataset_Custom, Dataset_PEMS, UCRAnomalyloader
+    Dataset_Custom, Dataset_PEMS, UCRAnomalyloader, Dataset_Gas
 from data_provider.data_loader_benchmark import CIDatasetBenchmark, \
     CIAutoRegressionDatasetBenchmark
 
@@ -16,6 +16,7 @@ data_dict = {
     'PEMS': Dataset_PEMS,
     'custom': Dataset_Custom,
     'UCRA': UCRAnomalyloader,
+    'Gas': Dataset_Gas,
 }
 
 
